@@ -4,71 +4,67 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 static void usage(const char *a) {
-    fprintf(stderr, "Usage: %s <cmd> [args]\n", a);
+    fprintf(stderr, "Usage: %s <command> [args...]\n", a);
     exit(1);
 }
 
-static double d(struct timespec a, struct timespec b) {
-    return (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
+static double elapsed_seconds(const struct timespec *a, const struct timespec *b) {
+    long sec = b->tv_sec - a->tv_sec;
+    long nsec = b->tv_nsec - a->tv_nsec;
+    return (double)sec + (double)nsec / 1e9;
 }
 
-int main(int c, char **v) {
-    if (c < 2) usage(v[0]);
+int main(int argc, char **argv) {
+    if (argc < 2) usage(argv[0]);
 
     struct timespec t0, t1;
     if (clock_gettime(CLOCK_MONOTONIC, &t0) != 0) {
-        fprintf(stderr, "clock_gettime: %s\n", strerror(errno));
+        perror("clock_gettime");
         return 1;
     }
 
     pid_t pid = fork();
     if (pid < 0) {
-        fprintf(stderr, "fork: %s\n", strerror(errno));
+        perror("fork");
         return 1;
     }
 
     if (pid == 0) {
-        execvp(v[1], &v[1]);
-        fprintf(stderr, "execvp('%s'): %s\n", v[1], strerror(errno));
+        execvp(argv[1], &argv[1]);
+        fprintf(stderr, "Error: execvp failed: %s\n", strerror(errno));
         _exit(127);
     }
 
     int status = 0;
-    pid_t w;
-    do {
-        w = waitpid(pid, &status, 0);
-    } while (w < 0 && errno == EINTR);
-
-    if (w < 0) {
-        fprintf(stderr, "waitpid: %s\n", strerror(errno));
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
         return 1;
     }
 
     if (clock_gettime(CLOCK_MONOTONIC, &t1) != 0) {
-        fprintf(stderr, "clock_gettime: %s\n", strerror(errno));
+        perror("clock_gettime");
         return 1;
     }
 
-    printf("Child PID: %d\n", (int)w);
-
+    int exit_code = 0;
     if (WIFEXITED(status)) {
-        printf("Exit code: %d\n", WEXITSTATUS(status));
+        exit_code = WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
-        printf("Terminated by signal: %d\n", WTERMSIG(status));
-#ifdef WCOREDUMP
-        printf(WCOREDUMP(status) ? "(core dumped)\n" : "\n");
-#else
-        printf("\n");
-#endif
+        exit_code = 128 + WTERMSIG(status);
     } else {
-        printf("Child ended with unknown status: 0x%x\n", status);
+        exit_code = 1;
     }
 
-    printf("Elapsed time: %.6f seconds\n", d(t0, t1));
+    double elapsed = elapsed_seconds(&t0, &t1);
+
+   
+    printf("pid=%ld elapsed=%.3f exit=%d\n", (long)pid, elapsed, exit_code);
+
     return 0;
 }
